@@ -48,7 +48,7 @@ import requests
 # Constants
 # ---------------------------------------------------------------------------
 
-PVGIS_BASE = "https://re.jrc.ec.europa.eu/api/v5_2/seriescalc"
+PVGIS_BASE = "https://re.jrc.ec.europa.eu/api/v5_3/seriescalc"
 
 # Simple on-disk cache so repeated runs with the same parameters don't hammer
 # the API.  Cache lives in a subdirectory of the script's folder.
@@ -57,7 +57,7 @@ CACHE_DIR = Path(__file__).parent / ".pvgis_cache"
 # PVGIS SARAH2 covers 2005-2023 for Europe.  We fetch a single representative
 # year so that month-level comparisons are fair (same weather year).
 DEFAULT_YEAR = 2023
-DEFAULT_DB   = "PVGIS-SARAH2"
+DEFAULT_DB   = "PVGIS-SARAH3"
 
 # ---------------------------------------------------------------------------
 # Public API
