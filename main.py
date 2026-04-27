@@ -19,7 +19,7 @@ import pandas as pd
 
 from irradiance import ConstantIrradianceProvider
 from panel_systems import FixedSystem, SingleAxisSystem, DualAxisSystem
-from simulation import run_simulation, tilt_sweep
+from simulation import run_simulation, tilt_sweep, TIME_STEP_MINUTES
 import plot
 
 
@@ -59,6 +59,8 @@ def parse_args():
                         help="Year to fetch from PVGIS (default: 2020, covers 2005-2020)")
     parser.add_argument("--raddatabase", type=str, default=None,
                         help="PVGIS radiation DB override, e.g. 'PVGIS-ERA5' (default: auto)")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run PVGIS sanity checks for Fixed and Dual-Axis setups")
     return parser.parse_args()
 
 
@@ -125,6 +127,50 @@ def main():
         gain_str = f"+{gain:.1f}%" if gain >= 0 else f"{gain:.1f}%"
         print(f"  {name:<14} {kwh:>10.3f} {gain_str:>10}")
     print()
+
+    # --- PVGIS Sanity Check ---
+    if args.validate:
+        if args.provider != "pvgis":
+            print("  --- PVGIS Sanity Check ---")
+            print("  Validation requires '--provider pvgis'. Skipping.\n")
+        else:
+            print("  --- PVGIS Sanity Check ---")
+            dt_step_h = TIME_STEP_MINUTES / 60.0
+
+            # 1. Fixed Check (Tight Geometric Validation)
+            # Convert local azimuth (clockwise from North, 180=South)
+            # to PVGIS aspect (0=South, 90=West, -90=East)
+            pvgis_aspect = 180.0 - 180.0  # Standard FixedSystem uses 180 (South)
+
+            pvgis_fixed_kwh_m2 = provider.fetch_validation_total(
+                lat=args.lat, lon=args.lon, trackingtype=0, angle=fixed_tilt, aspect=pvgis_aspect,
+                months=args.months, start_hour=args.start, end_hour=args.end
+            )
+            # Extract raw irradiance sum from local engine (ignores area & efficiency)
+            local_fixed_kwh_m2 = (results["Fixed"]["irradiance_wm2"].sum() * dt_step_h) / 1000
+
+            fixed_diff = (local_fixed_kwh_m2 / pvgis_fixed_kwh_m2 - 1) * 100 if pvgis_fixed_kwh_m2 else 0
+
+            print("  [Fixed Tilt - Tight Geometric Validation]")
+            print(f"  Local Calculation : {local_fixed_kwh_m2:>8.2f} kWh/m²")
+            print(f"  PVGIS Official    : {pvgis_fixed_kwh_m2:>8.2f} kWh/m²")
+            print(f"  Difference        : {fixed_diff:>+8.1f}%   (Expected deviation: < 3%)")
+            print()
+
+            # 2. Dual-Axis Check (Upper Bound Sense Check)
+            pvgis_dual_kwh_m2 = provider.fetch_validation_total(
+                lat=args.lat, lon=args.lon, trackingtype=2,
+                months=args.months, start_hour=args.start, end_hour=args.end
+            )
+            local_dual_kwh_m2 = (results["Dual-Axis"]["irradiance_wm2"].sum() * dt_step_h) / 1000
+
+            dual_diff = (local_dual_kwh_m2 / pvgis_dual_kwh_m2 - 1) * 100 if pvgis_dual_kwh_m2 else 0
+
+            print("  [Dual-Axis - Upper Bound Sense Check]")
+            print(f"  Local Calculation : {local_dual_kwh_m2:>8.2f} kWh/m²")
+            print(f"  PVGIS Official    : {pvgis_dual_kwh_m2:>8.2f} kWh/m²")
+            print(f"  Difference        : {dual_diff:>+8.1f}%   (Expected deviation: 5-15%)")
+            print()
 
     # Tilt sweep
     optimal_tilt = fixed_tilt

@@ -196,6 +196,65 @@ class PVGISProvider(IrradianceProvider):
 
         return self._lookup(self._cache[cache_key], dt)
 
+    def fetch_validation_total(self, lat: float, lon: float, trackingtype: int,
+                               months: list[int] = None, start_hour: float = 0.0, end_hour: float = 24.0,
+                               angle: float = 0.0, aspect: float = 0.0) -> float:
+        """
+        Fetches the total in-plane irradiance (kWh/m²) directly from PVGIS for the specified timeframe.
+        Used for validation against local geometric calculations.
+        """
+        import requests
+
+        params = {
+            "lat": lat,
+            "lon": lon,
+            "startyear": self.year,
+            "endyear": self.year,
+            "trackingtype": trackingtype,
+            "angle": angle,
+            "aspect": aspect,
+            "components": 1,
+            "pvcalculation": 0,
+            "usehorizon": int(self.usehorizon),
+            "outputformat": "json",
+        }
+        if self.raddatabase:
+            params["raddatabase"] = self.raddatabase
+
+        mode_str = "Fixed" if trackingtype == 0 else "Dual-Axis"
+        print(f"    [PVGIS] Fetching {mode_str} validation baseline...", end="", flush=True)
+        resp = requests.get(PVGIS_API, params=params, timeout=self.timeout_s)
+        resp.raise_for_status()
+        data = resp.json()
+        print(" done.")
+
+        hourly = data.get("outputs", {}).get("hourly", [])
+        total_wh = 0.0
+
+        for row in hourly:
+            # Parse the time string "20200615:1011"
+            raw = row["time"]
+            date_part, time_part = raw.split(":")
+            month = int(date_part[4:6])
+            hour_float = int(time_part[0:2]) + int(time_part[2:4]) / 60.0
+
+            # Filter out records outside the simulation timeframe
+            if months and month not in months:
+                continue
+            if not (start_hour <= hour_float <= end_hour):
+                continue
+
+            if "G(i)" in row:
+                g_i = float(row["G(i)"])
+            elif "Gb(i)" in row and "Gd(i)" in row:
+                g_i = float(row.get("Gb(i)", 0.0)) + float(row.get("Gd(i)", 0.0)) + float(row.get("Gr(i)", 0.0))
+            else:
+                raise KeyError(f"Validation failed: Expected 'G(i)' or components in PVGIS response.")
+
+            total_wh += max(g_i, 0.0)
+
+        return total_wh / 1000.0
+
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
