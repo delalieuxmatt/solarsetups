@@ -1,178 +1,214 @@
 """
 simulation.py
-Time-step integration engine. Runs over selected months/hours and accumulates
-kWh per system using minute-level resolution.
+=============
+Time-series simulation engine — PVGIS edition.
+
+All irradiance values come directly from PVGIS G(i) (global in-plane
+irradiance on the panel surface).  We never decompose into DNI/DHI or
+compute angles of incidence locally.  That was the source of the flat-panel
+bias in the previous version: the isotropic diffuse term
+    DHI * (1 + cos(tilt)) / 2
+is maximised at tilt=0, and at Belgium's latitude the diffuse component
+dominates enough to make a flat panel appear optimal.
+
+PVGIS tracking types used here:
+    0  fixed plane    → requires angle (tilt) + aspect (azimuth from South)
+    1  single-axis N-S horizontal tracker  → requires angle (axis tilt)
+    2  dual-axis tracker
+
+The tilt_sweep function sends one PVGIS request per tilt angle (south-facing,
+fixed) and is the authoritative source for the optimum fixed tilt.
+
+DataFrame schema returned by run_simulation() — identical to the old schema
+so that plot.py needs no changes:
+    datetime, month, hour, solar_altitude_deg, solar_azimuth_deg,
+    panel_tilt_deg, panel_azimuth_deg, irradiance_wm2, power_w, energy_wh
 """
 
 from __future__ import annotations
-import numpy as np
-import pandas as pd
-from datetime import datetime, timedelta, timezone
+
 from typing import Sequence
 
-from solar_position import sun_position
-from irradiance import IrradianceProvider
-from panel_systems import PanelSystem, irradiance_on_panel
+import numpy as np
+import pandas as pd
+import time
+
+import pvgis_client
+
+# PVGIS returns one row per hour
+_DT_STEP_H = 1.0
 
 
-# Simulation year — arbitrary non-leap year used for geometry
-SIM_YEAR = 2023
-TIME_STEP_MINUTES = 1
+# ---------------------------------------------------------------------------
+# System descriptors
+# ---------------------------------------------------------------------------
+
+class SystemConfig:
+    """Lightweight descriptor passed to run_simulation()."""
+    def __init__(
+        self,
+        name: str,
+        trackingtype: int,
+        angle: float = 0.0,
+        aspect: float = 0.0,
+    ):
+        self.name = name
+        self.trackingtype = trackingtype
+        self.angle  = angle   # tilt from horizontal (fixed) or axis tilt (SAT)
+        self.aspect = aspect  # azimuth from South: 0=S, -90=E, +90=W
 
 
-def build_timesteps(months: Sequence[int],
-                    start_hour: float,
-                    end_hour: float) -> list[datetime]:
+def fixed_system(tilt_deg: float, azimuth_deg_from_north: float = 180.0) -> SystemConfig:
     """
-    Build a list of UTC datetime objects covering every minute of every day
-    in the requested months between start_hour and end_hour (UTC).
+    Return a SystemConfig for a fixed panel.
+
+    azimuth_deg_from_north : compass direction the panel faces
+        (0=North, 90=East, 180=South, 270=West)
+    PVGIS aspect            : 0=South, -90=East, +90=West
+    Conversion              : aspect = azimuth_from_north - 180
     """
-    steps: list[datetime] = []
-    step = timedelta(minutes=TIME_STEP_MINUTES)
-
-    for month in months:
-        # Number of days in month for SIM_YEAR
-        if month == 12:
-            last_day = (datetime(SIM_YEAR + 1, 1, 1) - timedelta(days=1)).day
-        else:
-            last_day = (datetime(SIM_YEAR, month + 1, 1) - timedelta(days=1)).day
-
-        for day in range(1, last_day + 1):
-            start_dt = datetime(SIM_YEAR, month, day,
-                                int(start_hour),
-                                int((start_hour % 1) * 60),
-                                tzinfo=timezone.utc)
-            end_dt = datetime(SIM_YEAR, month, day,
-                              int(end_hour),
-                              int((end_hour % 1) * 60),
-                              tzinfo=timezone.utc)
-            dt = start_dt
-            while dt <= end_dt:
-                steps.append(dt)
-                dt += step
-
-    return steps
+    aspect = azimuth_deg_from_north - 180.0
+    return SystemConfig("Fixed", trackingtype=0, angle=tilt_deg, aspect=aspect)
 
 
-def run_simulation(system: PanelSystem,
-                   provider: IrradianceProvider,
-                   months: Sequence[int],
-                   start_hour: float,
-                   end_hour: float,
-                   latitude: float,
-                   longitude: float,
-                   panel_area_m2: float = 1.0,
-                   efficiency: float = 0.20) -> pd.DataFrame:
+def single_axis_system(axis_tilt_deg: float = 0.0) -> SystemConfig:
     """
-    Run the time-step simulation for one system.
+    Single horizontal N-S axis tracker (PVGIS trackingtype=1).
 
-    Returns a DataFrame with columns:
-        datetime, month, hour, solar_altitude_deg, solar_azimuth_deg,
-        panel_tilt_deg, panel_azimuth_deg, irradiance_wm2, power_w, energy_wh
+    axis_tilt_deg is the fixed inclination of the tracking axis itself
+    (0 = flat horizontal axis — the common utility-scale setup).
+    The tracker rotates around this axis to minimise the angle of incidence
+    throughout the day.
     """
-    timesteps = build_timesteps(months, start_hour, end_hour)
-    dt_step_h = TIME_STEP_MINUTES / 60.0  # hours per step → for Wh
+    ttype = 5 if axis_tilt_deg > 0.0 else 1
+    return SystemConfig("Single-Axis", trackingtype=ttype, angle=axis_tilt_deg, aspect=0.0)
 
+
+def dual_axis_system() -> SystemConfig:
+    """Two-axis tracker: always points directly at the sun."""
+    return SystemConfig("Dual-Axis", trackingtype=2, angle=0.0, aspect=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Core simulation
+# ---------------------------------------------------------------------------
+
+def run_simulation(
+    system: SystemConfig,
+    *,
+    months: Sequence[int],
+    start_hour: float,
+    end_hour: float,
+    latitude: float,
+    longitude: float,
+    panel_area_m2: float = 1.0,
+    efficiency: float = 0.20,
+    year: int = pvgis_client.DEFAULT_YEAR,
+    raddatabase: str = pvgis_client.DEFAULT_DB,
+    use_cache: bool = True,
+) -> pd.DataFrame:
+    """
+    Simulate energy production for one system over the requested months/hours.
+
+    Steps:
+    1.  Fetch the full year of hourly G(i) from PVGIS for this system config.
+    2.  Filter rows to the requested months and UTC-hour window.
+    3.  Compute power and energy from G(i) * area * efficiency.
+
+    Returns a DataFrame matching the schema used by plot.py.
+    """
+    # 1. Fetch from PVGIS (cached after first call)
+    raw = pvgis_client.fetch_hourly(
+        latitude, longitude,
+        trackingtype=system.trackingtype,
+        angle=system.angle,
+        aspect=system.aspect,
+        year=year,
+        raddatabase=raddatabase,
+        use_cache=use_cache,
+    )
+
+    # 2. Filter to requested months and hour window
+    df = raw.copy()
+    df["month"] = df.index.month
+    df["hour"]  = df.index.hour + df.index.minute / 60.0
+
+    mask = (
+        df["month"].isin(months) &
+        (df["hour"] >= start_hour) &
+        (df["hour"] <= end_hour)
+    )
+    df = df[mask].copy()
+
+    # 3. Compute power / energy
+    # G_i is in W/m²; each row represents exactly one hour
+    df["irradiance_wm2"] = df["G_i"].clip(lower=0.0)
+    df["power_w"]        = df["irradiance_wm2"] * panel_area_m2 * efficiency
+    df["energy_wh"]      = df["power_w"] * _DT_STEP_H
+
+    # Populate legacy columns (plot.py needs month, hour, power_w, energy_wh)
+    df["datetime"]           = df.index
+    df["solar_altitude_deg"] = df["H_sun"]         # PVGIS provides sun height
+    df["solar_azimuth_deg"]  = np.nan              # not provided by seriescalc
+    df["panel_tilt_deg"]     = system.angle
+    df["panel_azimuth_deg"]  = system.aspect + 180.0   # convert back to from-North
+
+    cols = [
+        "datetime", "month", "hour",
+        "solar_altitude_deg", "solar_azimuth_deg",
+        "panel_tilt_deg", "panel_azimuth_deg",
+        "irradiance_wm2", "power_w", "energy_wh",
+    ]
+    return df[cols].reset_index(drop=True)
+
+
+# ---------------------------------------------------------------------------
+# Tilt sweep
+# ---------------------------------------------------------------------------
+
+def tilt_sweep(
+    *,
+    months: Sequence[int],
+    start_hour: float,
+    end_hour: float,
+    latitude: float,
+    longitude: float,
+    panel_area_m2: float = 1.0,
+    efficiency: float = 0.20,
+    tilt_min: float = 0.0,
+    tilt_max: float = 90.0,
+    tilt_step: float = 5.0,
+    year: int = pvgis_client.DEFAULT_YEAR,
+    raddatabase: str = pvgis_client.DEFAULT_DB,
+    use_cache: bool = True,
+) -> pd.DataFrame:
+    """
+    Sweep south-facing fixed tilt angles and return total kWh for each.
+
+    Each tilt is a separate PVGIS request (disk-cached after first run).
+    Returns a DataFrame with columns: tilt_deg, total_kwh.
+    """
+    tilts = np.arange(tilt_min, tilt_max + tilt_step / 2, tilt_step)
     records = []
-    for dt in timesteps:
-        alt, az = sun_position(dt, latitude, longitude)
 
-        if alt <= 0:
-            records.append({
-                "datetime": dt,
-                "month": dt.month,
-                "hour": dt.hour + dt.minute / 60,
-                "solar_altitude_deg": np.degrees(alt),
-                "solar_azimuth_deg": np.degrees(az),
-                "panel_tilt_deg": 0.0,
-                "panel_azimuth_deg": 0.0,
-                "irradiance_wm2": 0.0,
-                "power_w": 0.0,
-                "energy_wh": 0.0,
-            })
-            continue
-
-        irr = provider.get_irradiance(dt, latitude, longitude, alt)
-        p_tilt, p_az = system.get_orientation(alt, az)
-
-        g_panel = irradiance_on_panel(
-            irr.dni, irr.dhi, alt, az, p_tilt, p_az
+    for tilt in tilts:
+        cfg = fixed_system(tilt_deg=float(tilt), azimuth_deg_from_north=180.0)
+        sim = run_simulation(
+            cfg,
+            months=months,
+            start_hour=start_hour,
+            end_hour=end_hour,
+            latitude=latitude,
+            longitude=longitude,
+            panel_area_m2=panel_area_m2,
+            efficiency=efficiency,
+            year=year,
+            raddatabase=raddatabase,
+            use_cache=use_cache,
         )
-        power_w = g_panel * panel_area_m2 * efficiency
-        energy_wh = power_w * dt_step_h
-
-        records.append({
-            "datetime": dt,
-            "month": dt.month,
-            "hour": dt.hour + dt.minute / 60,
-            "solar_altitude_deg": np.degrees(alt),
-            "solar_azimuth_deg": np.degrees(az),
-            "panel_tilt_deg": np.degrees(p_tilt),
-            "panel_azimuth_deg": np.degrees(p_az),
-            "irradiance_wm2": g_panel,
-            "power_w": power_w,
-            "energy_wh": energy_wh,
-        })
+        total_kwh = sim["energy_wh"].sum() / 1000.0
+        records.append({"tilt_deg": float(tilt), "total_kwh": total_kwh})
+        print(f"    tilt {tilt:5.1f}°  →  {total_kwh:.4f} kWh")
+        time.sleep(1.0)
 
     return pd.DataFrame(records)
-
-
-def tilt_sweep(provider: IrradianceProvider,
-               months: Sequence[int],
-               start_hour: float,
-               end_hour: float,
-               latitude: float,
-               longitude: float,
-               panel_area_m2: float = 1.0,
-               efficiency: float = 0.20,
-               tilt_min: float = 0.0,
-               tilt_max: float = 90.0,
-               tilt_step: float = 5.0) -> pd.DataFrame:
-    """
-    Efficiently sweep fixed tilt angles (south-facing) by pre-computing sun
-    positions and irradiance once, then evaluating AOI for each tilt.
-    Returns a DataFrame: tilt_deg, total_kwh
-    """
-    from panel_systems import irradiance_on_panel
-
-    tilts = np.arange(tilt_min, tilt_max + tilt_step, tilt_step)
-    timesteps = build_timesteps(months, start_hour, end_hour)
-    dt_step_h = TIME_STEP_MINUTES / 60.0
-    az_fixed = np.radians(180.0)  # south-facing
-
-    # Pre-compute sun position and irradiance for every timestep
-    altitudes, solar_azs, dnis, dhis = [], [], [], []
-    for dt in timesteps:
-        alt, az = sun_position(dt, latitude, longitude)
-        irr = provider.get_irradiance(dt, latitude, longitude, alt)
-        altitudes.append(alt)
-        solar_azs.append(az)
-        dnis.append(irr.dni)
-        dhis.append(irr.dhi)
-
-    altitudes = np.array(altitudes)
-    solar_azs = np.array(solar_azs)
-    dnis      = np.array(dnis)
-    dhis      = np.array(dhis)
-    above     = altitudes > 0
-
-    results = []
-    for tilt_deg in tilts:
-        tilt_r = np.radians(tilt_deg)
-        # Vectorised AOI calculation for this tilt
-        sx = np.cos(altitudes) * np.sin(solar_azs)
-        sy = np.cos(altitudes) * np.cos(solar_azs)
-        sz = np.sin(altitudes)
-        nx = np.sin(tilt_r) * np.sin(az_fixed)
-        ny = np.sin(tilt_r) * np.cos(az_fixed)
-        nz = np.cos(tilt_r)
-        dot = sx * nx + sy * ny + sz * nz
-        aoi = np.arccos(np.clip(dot, -1.0, 1.0))
-
-        direct  = dnis * np.maximum(np.cos(aoi), 0.0)
-        diffuse = dhis * (1 + np.cos(tilt_r)) / 2
-        g_panel = np.where(above, direct + diffuse, 0.0)
-        total_kwh = (g_panel * panel_area_m2 * efficiency * dt_step_h).sum() / 1000
-        results.append({"tilt_deg": tilt_deg, "total_kwh": total_kwh})
-
-    return pd.DataFrame(results)

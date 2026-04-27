@@ -154,7 +154,7 @@ class PVGISProvider(IrradianceProvider):
 
     Parameters
     ----------
-    year        : Calendar year to fetch. PVGIS-SARAH2 covers 2005-2020.
+    year        : Calendar year to fetch. PVGIS-SARAH2 covers 2005-2023.
                   ERA5 is available for earlier/later years.
     raddatabase : PVGIS radiation DB. Default uses the PVGIS automatic
                   selection (SARAH2 for Europe/Africa, ERA5 globally).
@@ -164,13 +164,13 @@ class PVGISProvider(IrradianceProvider):
 
     Usage
     -----
-        provider = PVGISProvider(year=2020)
+        provider = PVGISProvider(year=2023)
         # use exactly like ConstantIrradianceProvider:
         irr = provider.get_irradiance(dt, lat, lon, solar_altitude_rad)
     """
 
     def __init__(self,
-                 year: int = 2020,
+                 year: int = 2023,
                  raddatabase: Optional[str] = None,
                  usehorizon: bool = True,
                  timeout_s: int = 60):
@@ -232,7 +232,7 @@ class PVGISProvider(IrradianceProvider):
         total_wh = 0.0
 
         for row in hourly:
-            # Parse the time string "20200615:1011"
+            # Parse the time string "20230615:1011"
             raw = row["time"]
             date_part, time_part = raw.split(":")
             month = int(date_part[4:6])
@@ -316,7 +316,7 @@ class PVGISProvider(IrradianceProvider):
 
         records = []
         for row in hourly:
-            # Parse "20200615:1011" → datetime(2020, 6, 15, 10, 11, tzinfo=UTC)
+            # Parse "20230615:1011" → datetime(2023, 6, 15, 10, 11, tzinfo=UTC)
             raw = row["time"]
             date_part, time_part = raw.split(":")
             year = int(date_part[0:4])
@@ -360,7 +360,7 @@ class PVGISProvider(IrradianceProvider):
         ------------------
         The simulation engine uses a fixed SIM_YEAR (currently 2023) for
         all timesteps, while the PVGIS DataFrame is indexed with the actual
-        fetched year (e.g. 2020). Without correction every lookup would land
+        fetched year (e.g. 2023). Without correction every lookup would land
         past the end of the index and silently return 0 W/m² (the last row
         after December 31st at night). We therefore replace the year in `dt`
         with the year of the first record in the DataFrame before searching.
@@ -374,7 +374,7 @@ class PVGISProvider(IrradianceProvider):
         if dt.tzinfo is None:
             dt = dt.replace(tzinfo=timezone.utc)
 
-        # Map simulation year → PVGIS data year (e.g. 2023 → 2020)
+        # Map simulation year → PVGIS data year (e.g. 2023 → 2023)
         data_year = df.index[0].year
         if dt.year != data_year:
             try:
@@ -441,7 +441,7 @@ class NASAPowerProvider(IrradianceProvider):
         - Return DNI/DHI/GHI for the matching hour
     """
 
-    def __init__(self, year: int = 2020):
+    def __init__(self, year: int = 2023):
         self.year = year
         self._cache: dict = {}
         raise NotImplementedError(
