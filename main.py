@@ -52,6 +52,13 @@ def parse_args():
                         help="Tilt sweep step size (default: 5°)")
     parser.add_argument("--no-sweep",   action="store_true",
                         help="Skip the tilt sweep analysis")
+    parser.add_argument("--provider",   type=str, default="constant",
+                        choices=["constant", "pvgis"],
+                        help="Irradiance data source: 'constant' (default) or 'pvgis'")
+    parser.add_argument("--year",       type=int, default=2020,
+                        help="Year to fetch from PVGIS (default: 2020, covers 2005-2020)")
+    parser.add_argument("--raddatabase", type=str, default=None,
+                        help="PVGIS radiation DB override, e.g. 'PVGIS-ERA5' (default: auto)")
     return parser.parse_args()
 
 
@@ -71,8 +78,16 @@ def main():
     print(f"  Fixed tilt  : {fixed_tilt:.1f}°  (south-facing)")
     print("=" * 60)
 
-    # Irradiance provider (swap this line to use PVGIS/NASA later)
-    provider = ConstantIrradianceProvider()
+    # Irradiance provider — swap here, nothing else changes
+    if args.provider == "pvgis":
+        from irradiance import PVGISProvider
+        provider = PVGISProvider(year=args.year, raddatabase=args.raddatabase)
+        provider_label = f"PVGIS ({args.year})"
+    else:
+        provider = ConstantIrradianceProvider()
+        provider_label = "Constant (1370 W/m² + air mass)"
+
+    print(f"  Provider    : {provider_label}")
 
     # Define systems
     systems = {
