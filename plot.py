@@ -5,9 +5,16 @@ All visualization for the solar simulation results.
 
 Compatible with the DataFrame schema produced by simulation.run_simulation():
     datetime, month, hour, irradiance_wm2, power_w, energy_wh
+
+All public functions accept an optional `title` parameter so that the caller
+(main.py) can label each scenario group without touching this file.
+Unknown system names fall back to a deterministic hash-derived color so that
+new systems added in scenarios.py never raise a KeyError here.
 """
 
 from __future__ import annotations
+
+import hashlib
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -15,23 +22,61 @@ import matplotlib.ticker as mticker
 import pandas as pd
 from typing import Sequence
 
-# --- KU Leuven Official Brand Palette ---
-SYSTEM_COLORS = {
-    "Fixed":       "#DD8A2E",   # KU Leuven Accent (Orange/Bronze)
-    "Single-Axis": "#52BDEC",   # KU Leuven Light Blue
-    "Dual-Axis":   "#00407A",   # KU Leuven Primary Dark Blue
+# ---------------------------------------------------------------------------
+# KU Leuven Official Brand Palette
+# ---------------------------------------------------------------------------
+
+# KU Leuven blue ramp — dark to light, all readable, none too pale
+_KUL_BLUES = {
+    1: "#00407A",   # KUL primary dark blue
+    2: "#185FA5",   # strong mid blue
+    3: "#378ADD",   # standard blue
+    4: "#52BDEC",   # KUL light blue
+    5: "#85B7EB",   # soft blue — lightest allowed
 }
+
+SYSTEM_COLORS = {
+    # Stationary — 3 systems, spread across the ramp
+    "Fixed":              _KUL_BLUES[1],
+    "Single-Axis":        _KUL_BLUES[3],
+    "Dual-Axis":          _KUL_BLUES[5],
+
+    # Vehicle orientations — 3 systems, same ramp positions
+    "EW Flat":            _KUL_BLUES[5],
+    "EW Rear":            _KUL_BLUES[3],
+    "EW Side":            _KUL_BLUES[1],
+
+    "NS Flat":            _KUL_BLUES[5],
+    "NS Rear":            _KUL_BLUES[3],
+    "NS Side":            _KUL_BLUES[1],
+
+    # Vehicle tracking — 3 systems
+    "Dual-Axis":          _KUL_BLUES[1],
+    "Single-Axis NS":     _KUL_BLUES[3],
+    "Single-Axis EW":     _KUL_BLUES[5],
+}
+
 BACKGROUND  = "#FFFFFF"
 PANEL_BG    = "#FFFFFF"
-TEXT_COLOR  = "#222222"       # Soft black for readability
-GRID_COLOR  = "#E5E5E5"       # Subtle grey for grid lines
+TEXT_COLOR  = "#222222"
+GRID_COLOR  = "#E5E5E5"
 
 
-def _apply_thesis_style(fig, axes_list):
-    """Applies a clean, print-friendly styling suitable for academic papers."""
-    # Use a serif font to match LaTeX typesetting
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
+
+def _get_color(name: str) -> str:
+    """Return a brand color for known systems, or a deterministic fallback."""
+    if name in SYSTEM_COLORS:
+        return SYSTEM_COLORS[name]
+    h = int(hashlib.md5(name.encode()).hexdigest()[:6], 16)
+    return f"#{h:06X}"
+
+
+def _apply_thesis_style(fig, axes_list) -> None:
+    """Clean, print-friendly styling suitable for academic papers."""
     plt.rcParams["font.family"] = "serif"
-
     fig.patch.set_facecolor(BACKGROUND)
     for ax in axes_list:
         ax.set_facecolor(PANEL_BG)
@@ -41,13 +86,10 @@ def _apply_thesis_style(fig, axes_list):
         ax.title.set_color(TEXT_COLOR)
         ax.title.set_fontsize(12)
         ax.title.set_fontweight("bold")
-
-        # Despine the top and right to reduce chart junk
-        ax.spines['top'].set_visible(False)
-        ax.spines['right'].set_visible(False)
-        ax.spines['bottom'].set_color('#555555')
-        ax.spines['left'].set_color('#555555')
-
+        ax.spines["top"].set_visible(False)
+        ax.spines["right"].set_visible(False)
+        ax.spines["bottom"].set_color("#555555")
+        ax.spines["left"].set_color("#555555")
         ax.grid(color=GRID_COLOR, linewidth=0.5, linestyle=":")
 
 
@@ -55,13 +97,17 @@ def _apply_thesis_style(fig, axes_list):
 # 1. Summary bar chart
 # ---------------------------------------------------------------------------
 
-def plot_summary(results: dict[str, pd.DataFrame], save_path: str | None = None):
+def plot_summary(
+    results: dict[str, pd.DataFrame],
+    title: str = "Total Energy Generated — System Comparison",
+    save_path: str | None = None,
+) -> None:
     """Horizontal bar chart comparing total kWh per system."""
     names  = list(results.keys())
     totals = [df["energy_wh"].sum() / 1000 for df in results.values()]
-    colors = [SYSTEM_COLORS.get(n, "#888") for n in names]
+    colors = [_get_color(n) for n in names]
 
-    fig, ax = plt.subplots(figsize=(8, 3.5))
+    fig, ax = plt.subplots(figsize=(8, max(3.0, len(names) * 0.7)))
     bars = ax.barh(names, totals, color=colors, height=0.5, edgecolor="none")
 
     for bar, val in zip(bars, totals):
@@ -73,15 +119,15 @@ def plot_summary(results: dict[str, pd.DataFrame], save_path: str | None = None)
         )
 
     ax.set_xlabel("Total Energy (kWh)")
-    ax.set_title("Total Energy Generated — System Comparison", pad=12)
+    ax.set_title(title, pad=12)
     ax.set_xlim(0, max(totals) * 1.18)
 
     _apply_thesis_style(fig, [ax])
-    ax.grid(False, axis='y') # Remove horizontal grid lines for bar chart
+    ax.grid(False, axis="y")
 
     fig.tight_layout()
     if save_path:
-        fig.savefig(save_path, dpi=300, bbox_inches="tight") # Upped DPI for print
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
 
@@ -92,18 +138,18 @@ def plot_summary(results: dict[str, pd.DataFrame], save_path: str | None = None)
 def plot_monthly_breakdown(
     results: dict[str, pd.DataFrame],
     months: Sequence[int],
+    title: str = "Monthly Energy Breakdown by System",
     save_path: str | None = None,
-):
-    """Grouped bar chart: kWh per month per system."""
+) -> None:
     month_names = [
         "Jan", "Feb", "Mar", "Apr", "May", "Jun",
         "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
     ]
-    selected  = sorted(months)
+    selected  = sorted(months)          # only the months passed in
     n_months  = len(selected)
     n_systems = len(results)
     width     = 0.8 / n_systems
-    x         = np.arange(n_months)
+    x         = np.arange(n_months)     # one slot per selected month, no gaps
 
     fig, ax = plt.subplots(figsize=(10, 4.5))
 
@@ -114,66 +160,79 @@ def plot_monthly_breakdown(
         offset = (i - n_systems / 2 + 0.5) * width
         ax.bar(
             x + offset, monthly_kwh, width=width * 0.9,
-            label=name, color=SYSTEM_COLORS.get(name, "#888"), edgecolor="none",
+            label=name, color=_get_color(name), edgecolor="none",
         )
 
     ax.set_xticks(x)
-    ax.set_xticklabels([month_names[m - 1] for m in selected])
+    ax.set_xticklabels([month_names[m - 1] for m in selected])  # only selected months
     ax.set_ylabel("Energy (kWh)")
-    ax.set_title("Monthly Energy Breakdown by System", pad=12)
+    ax.set_title(title, pad=12)
     ax.legend(frameon=False, labelcolor=TEXT_COLOR)
 
     _apply_thesis_style(fig, [ax])
-    ax.grid(False, axis='x') # Keep only horizontal grid lines
+    ax.grid(False, axis="x")
 
     fig.tight_layout()
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
 
-
 # ---------------------------------------------------------------------------
 # 3. Tilt sweep — diminishing returns
 # ---------------------------------------------------------------------------
 
 def plot_tilt_sweep(
-    tilt_df: pd.DataFrame,
-    optimal_tilt: float,
+    sweeps: dict[str, pd.DataFrame],
+    optimal_tilts: dict[str, float],
+    title: str = "Energy vs Tilt Angle",
     save_path: str | None = None,
-):
+) -> None:
     """
-    Line chart of kWh vs fixed tilt angle, with marginal gain subplot.
+    Line chart of kWh vs tilt angle with marginal-gain subplot.
+    Accepts multiple systems for comparison (one curve per key in `sweeps`).
     """
-    tilts    = tilt_df["tilt_deg"].values
-    kwhs     = tilt_df["total_kwh"].values
-    marginal = np.gradient(kwhs, tilts)   # dkWh / d(deg)
-
     fig, (ax1, ax2) = plt.subplots(
         2, 1, figsize=(9, 6), sharex=True,
         gridspec_kw={"height_ratios": [3, 1.5]},
     )
 
-    # Top: total kWh
-    ax1.plot(tilts, kwhs, color=SYSTEM_COLORS["Fixed"], linewidth=2.5, zorder=3)
-    ax1.fill_between(tilts, kwhs, alpha=0.1, color=SYSTEM_COLORS["Fixed"])
-    # Use Dark Blue for the optimal marker
-    ax1.axvline(optimal_tilt, color=SYSTEM_COLORS["Dual-Axis"], linewidth=1.5, linestyle="--", zorder=4)
+    # Track vertical annotation positions to avoid overlap
+    used_x_positions: list[float] = []
 
-    y_annot = kwhs.min() + (kwhs.max() - kwhs.min()) * 0.05
-    ax1.text(
-        optimal_tilt + 1, y_annot,
-        f"  optimal\n  {optimal_tilt:.0f}°",
-        color=SYSTEM_COLORS["Dual-Axis"], fontsize=10, va="bottom",
-    )
+    for name, tilt_df in sweeps.items():
+        color    = _get_color(name)
+        tilts    = tilt_df["tilt_deg"].values
+        kwhs     = tilt_df["total_kwh"].values
+        marginal = np.gradient(kwhs, tilts)
+        opt      = optimal_tilts[name]
+
+        ax1.plot(tilts, kwhs, color=color, linewidth=2.5, zorder=3, label=name)
+        ax1.fill_between(tilts, kwhs, alpha=0.08, color=color)
+        ax1.axvline(opt, color=color, linewidth=1.5, linestyle="--", zorder=4)
+
+        # Stagger label x slightly if positions are crowded
+        x_label = opt + 1
+        while any(abs(x_label - px) < 4 for px in used_x_positions):
+            x_label += 4
+        used_x_positions.append(x_label)
+
+        y_annot = kwhs.min() + (kwhs.max() - kwhs.min()) * 0.05
+        ax1.text(
+            x_label, y_annot,
+            f"  {name}\n  opt: {opt:.0f}°",
+            color=color, fontsize=9, va="bottom",
+        )
+
+        ax2.plot(tilts, marginal, color=color, linewidth=2.0)
+        ax2.axvline(opt, color=color, linewidth=1.5, linestyle="--")
+
     ax1.set_ylabel("Total Energy (kWh)")
-    ax1.set_title("Fixed System: Energy vs Tilt Angle (South-facing)", pad=10)
+    ax1.set_title(title, pad=10)
+    ax1.legend(frameon=False, labelcolor=TEXT_COLOR)
 
-    # Bottom: marginal gain - using Light Blue
-    ax2.plot(tilts, marginal, color=SYSTEM_COLORS["Single-Axis"], linewidth=2.0)
     ax2.axhline(0, color="#888888", linewidth=1)
-    ax2.axvline(optimal_tilt, color=SYSTEM_COLORS["Dual-Axis"], linewidth=1.5, linestyle="--")
     ax2.set_ylabel("Marginal gain\n(kWh/deg)", fontsize=9)
-    ax2.set_xlabel("Fixed Tilt Angle (°)")
+    ax2.set_xlabel("Tilt Angle (°)")
 
     _apply_thesis_style(fig, [ax1, ax2])
     fig.tight_layout()
@@ -189,8 +248,9 @@ def plot_tilt_sweep(
 def plot_daily_curve(
     results: dict[str, pd.DataFrame],
     months: Sequence[int],
+    title: str = "Average Daily Power Curve by System",
     save_path: str | None = None,
-):
+) -> None:
     """Average power output by UTC hour (across all simulated days)."""
     fig, ax = plt.subplots(figsize=(10, 4.5))
 
@@ -200,17 +260,17 @@ def plot_daily_curve(
         hourly = df.groupby("hour_bin")["power_w"].mean().reset_index()
         ax.plot(
             hourly["hour_bin"], hourly["power_w"],
-            label=name, color=SYSTEM_COLORS.get(name, "#888"),
+            label=name, color=_get_color(name),
             linewidth=2.0, marker="o", markersize=4,
         )
         ax.fill_between(
             hourly["hour_bin"], hourly["power_w"],
-            alpha=0.08, color=SYSTEM_COLORS.get(name, "#888"),
+            alpha=0.08, color=_get_color(name),
         )
 
     ax.set_xlabel("Hour of Day (UTC)")
     ax.set_ylabel("Average Power (W)")
-    ax.set_title("Average Daily Power Curve by System", pad=12)
+    ax.set_title(title, pad=12)
     ax.legend(frameon=False, labelcolor=TEXT_COLOR)
     ax.xaxis.set_major_locator(mticker.MultipleLocator(1))
 

@@ -51,12 +51,21 @@ class SystemConfig:
         trackingtype: int,
         angle: float = 0.0,
         aspect: float = 0.0,
+        bidirectional: bool = False,
     ):
         self.name = name
         self.trackingtype = trackingtype
         self.angle  = angle   # tilt from horizontal (fixed) or axis tilt (SAT)
         self.aspect = aspect  # azimuth from South: 0=S, -90=E, +90=W
+        self.bidirectional = bidirectional
 
+def tractor_system(tilt_deg: float, forward_azimuth_deg_from_north: float = 90.0) -> SystemConfig:
+    """
+    Vehicle driving back and forth (e.g., East/West rows).
+    Averages irradiance from forward and reverse directions.
+    """
+    aspect = forward_azimuth_deg_from_north - 180.0
+    return SystemConfig("Tractor", trackingtype=0, angle=tilt_deg, aspect=aspect, bidirectional=True)
 
 def fixed_system(tilt_deg: float, azimuth_deg_from_north: float = 180.0) -> SystemConfig:
     """
@@ -80,7 +89,7 @@ def single_axis_system(axis_tilt_deg: float = 0.0) -> SystemConfig:
     The tracker rotates around this axis to minimise the angle of incidence
     throughout the day.
     """
-    ttype = 5 if axis_tilt_deg > 0.0 else 1
+    ttype = 1 if axis_tilt_deg > 0.0 else 1
     return SystemConfig("Single-Axis", trackingtype=ttype, angle=axis_tilt_deg, aspect=0.0)
 
 
@@ -89,35 +98,35 @@ def dual_axis_system() -> SystemConfig:
     return SystemConfig("Dual-Axis", trackingtype=2, angle=0.0, aspect=0.0)
 
 
+def single_axis_ew_system() -> SystemConfig:
+    """Single horizontal E-W axis tracker (PVGIS trackingtype=4)."""
+    return SystemConfig("Single-Axis EW", trackingtype=4, angle=0.0, aspect=0.0)
+
+
+
+
 # ---------------------------------------------------------------------------
 # Core simulation
 # ---------------------------------------------------------------------------
 
 def run_simulation(
-    system: SystemConfig,
-    *,
-    months: Sequence[int],
-    start_hour: float,
-    end_hour: float,
-    latitude: float,
-    longitude: float,
-    panel_area_m2: float = 1.0,
-    efficiency: float = 0.20,
-    year: int = pvgis_client.DEFAULT_YEAR,
-    raddatabase: str = pvgis_client.DEFAULT_DB,
-    use_cache: bool = True,
+        system: SystemConfig,
+        *,
+        months: Sequence[int],
+        start_hour: float,
+        end_hour: float,
+        latitude: float,
+        longitude: float,
+        panel_area_m2: float = 1.0,
+        efficiency: float = 0.20,
+        year: int = pvgis_client.DEFAULT_YEAR,
+        raddatabase: str = pvgis_client.DEFAULT_DB,
+        use_cache: bool = True,
 ) -> pd.DataFrame:
     """
     Simulate energy production for one system over the requested months/hours.
-
-    Steps:
-    1.  Fetch the full year of hourly G(i) from PVGIS for this system config.
-    2.  Filter rows to the requested months and UTC-hour window.
-    3.  Compute power and energy from G(i) * area * efficiency.
-
-    Returns a DataFrame matching the schema used by plot.py.
     """
-    # 1. Fetch from PVGIS (cached after first call)
+    # 1. Fetch the primary (forward) direction from PVGIS
     raw = pvgis_client.fetch_hourly(
         latitude, longitude,
         trackingtype=system.trackingtype,
@@ -128,30 +137,49 @@ def run_simulation(
         use_cache=use_cache,
     )
 
+    # 1b. If it's a vehicle driving back and forth, fetch the reverse and average
+    if getattr(system, "bidirectional", False):
+        reverse_aspect = system.aspect + 180.0
+        if reverse_aspect > 180.0:
+            reverse_aspect -= 360.0  # Keep within typical API bounds
+
+        raw_rev = pvgis_client.fetch_hourly(
+            latitude, longitude,
+            trackingtype=system.trackingtype,
+            angle=system.angle,
+            aspect=reverse_aspect,
+            year=year,
+            raddatabase=raddatabase,
+            use_cache=use_cache,
+        )
+
+        # Average the in-plane irradiance of both directions
+        raw = raw.copy()  # Make a copy to avoid SettingWithCopyWarning
+        raw["G_i"] = (raw["G_i"] + raw_rev["G_i"]) / 2.0
+
     # 2. Filter to requested months and hour window
     df = raw.copy()
     df["month"] = df.index.month
-    df["hour"]  = df.index.hour + df.index.minute / 60.0
+    df["hour"] = df.index.hour + df.index.minute / 60.0
 
     mask = (
-        df["month"].isin(months) &
-        (df["hour"] >= start_hour) &
-        (df["hour"] <= end_hour)
+            df["month"].isin(months) &
+            (df["hour"] >= start_hour) &
+            (df["hour"] <= end_hour)
     )
     df = df[mask].copy()
 
     # 3. Compute power / energy
-    # G_i is in W/m²; each row represents exactly one hour
     df["irradiance_wm2"] = df["G_i"].clip(lower=0.0)
-    df["power_w"]        = df["irradiance_wm2"] * panel_area_m2 * efficiency
-    df["energy_wh"]      = df["power_w"] * _DT_STEP_H
+    df["power_w"] = df["irradiance_wm2"] * panel_area_m2 * efficiency
+    df["energy_wh"] = df["power_w"] * _DT_STEP_H
 
-    # Populate legacy columns (plot.py needs month, hour, power_w, energy_wh)
-    df["datetime"]           = df.index
-    df["solar_altitude_deg"] = df["H_sun"]         # PVGIS provides sun height
-    df["solar_azimuth_deg"]  = np.nan              # not provided by seriescalc
-    df["panel_tilt_deg"]     = system.angle
-    df["panel_azimuth_deg"]  = system.aspect + 180.0   # convert back to from-North
+    # Populate legacy columns
+    df["datetime"] = df.index
+    df["solar_altitude_deg"] = df["H_sun"]
+    df["solar_azimuth_deg"] = np.nan
+    df["panel_tilt_deg"] = system.angle
+    df["panel_azimuth_deg"] = system.aspect + 180.0
 
     cols = [
         "datetime", "month", "hour",
@@ -161,13 +189,13 @@ def run_simulation(
     ]
     return df[cols].reset_index(drop=True)
 
-
 # ---------------------------------------------------------------------------
 # Tilt sweep
 # ---------------------------------------------------------------------------
 
 def tilt_sweep(
     *,
+    system_factory = None,
     months: Sequence[int],
     start_hour: float,
     end_hour: float,
@@ -192,7 +220,10 @@ def tilt_sweep(
     records = []
 
     for tilt in tilts:
-        cfg = fixed_system(tilt_deg=float(tilt), azimuth_deg_from_north=180.0)
+        if system_factory:
+            cfg = system_factory(float(tilt))
+        else:
+            cfg = fixed_system(tilt_deg=float(tilt), azimuth_deg_from_north=180.0)
         sim = run_simulation(
             cfg,
             months=months,

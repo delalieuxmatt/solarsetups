@@ -3,24 +3,9 @@ main.py
 =======
 Entry point for the solar panel kWh comparison tool — PVGIS edition.
 
-All irradiance data comes from the PVGIS seriescalc API.  The previous
-local geometric engine (solar_position.py + panel_systems.py) is no longer
-used for the actual simulation; PVGIS handles geometry, atmosphere, and
-tracking internally and returns G(i) — total in-plane irradiance — directly.
-
-Usage examples:
-
-    # Summer months, Belgium, 6 am – 8 pm UTC
-    python main.py --lat 50.8 --lon 4.4 --months 5 6 7 8 --start 6 --end 20
-
-    # Full year, Germany
-    python main.py --lat 48.0 --lon 11.5 --months 1 2 3 4 5 6 7 8 9 10 11 12
-
-    # Custom panel area / efficiency, skip tilt sweep
-    python main.py --lat 35.0 --lon -120.0 --months 6 7 --area 1.7 --efficiency 0.22 --no-sweep
-
-    # Use a specific PVGIS year and database
-    python main.py --lat 50.8 --lon 4.4 --year 2019 --raddatabase PVGIS-ERA5
+Scenario groups are defined in scenarios.py.  Edit that file to change
+what systems are compared on each plot.  This file handles CLI parsing,
+simulation (with deduplication), summary printing, and plot dispatch.
 """
 
 import argparse
@@ -29,17 +14,20 @@ import pandas as pd
 from simulation import (
     run_simulation,
     tilt_sweep,
-    fixed_system,
-    single_axis_system,
-    dual_axis_system,
+    tractor_system,
 )
+from scenarios import build_scenario_groups
 import pvgis_client
 import plot
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Solar panel kWh comparison: Fixed vs Single-Axis vs Dual-Axis"
+        description="Solar panel kWh comparison: Fixed vs Single-Axis vs Dual-Axis vs Tractor"
     )
     p.add_argument("--lat",         type=float, default=50.8,
                    help="Latitude in degrees (default: 50.8 — Belgium)")
@@ -53,8 +41,7 @@ def parse_args():
     p.add_argument("--end",         type=float, default=20.0,
                    help="End hour UTC (default: 20.0)")
     p.add_argument("--tilt",        type=float, default=None,
-                   help="Fixed tilt in degrees (default: auto = latitude, "
-                        "rounded to nearest integer)")
+                   help="Fixed tilt in degrees (default: auto = latitude)")
     p.add_argument("--area",        type=float, default=1.0,
                    help="Panel area in m² (default: 1.0)")
     p.add_argument("--efficiency",  type=float, default=0.20,
@@ -76,25 +63,40 @@ def parse_args():
     return p.parse_args()
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _print_summary_table(group_name: str, results: dict[str, pd.DataFrame]) -> None:
+    """Print a kWh summary table for one scenario group."""
+    fixed_kwh = results.get("Fixed")
+    fixed_kwh = fixed_kwh["energy_wh"].sum() / 1000.0 if fixed_kwh is not None else None
+
+    print(f"\n  ── {group_name} ──")
+    print(f"  {'System':<18} {'Total kWh':>10} {'vs Fixed':>10}")
+    print(f"  {'-'*42}")
+    for name, df in results.items():
+        kwh = df["energy_wh"].sum() / 1000.0
+        if fixed_kwh and fixed_kwh > 0:
+            gain = (kwh / fixed_kwh - 1) * 100
+            gain_str = f"+{gain:.1f}%" if gain >= 0 else f"{gain:.1f}%"
+        else:
+            gain_str = "—"
+        print(f"  {name:<18} {kwh:>10.3f} {gain_str:>10}")
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
 def main():
     args = parse_args()
 
-    # Default fixed tilt = latitude rounded to nearest degree
     fixed_tilt = args.tilt if args.tilt is not None else round(abs(args.lat))
+    print("Fixed tilt is:", fixed_tilt)
 
-    print("=" * 62)
-    print("  Solar Panel kWh Comparison Tool  (PVGIS data source)")
-    print("=" * 62)
-    print(f"  Location    : {args.lat}°N, {args.lon}°E")
-    print(f"  Months      : {args.months}")
-    print(f"  Hours (UTC) : {args.start:04.1f} – {args.end:04.1f}")
-    print(f"  Panel       : {args.area} m²   efficiency {args.efficiency*100:.0f}%")
-    print(f"  Fixed tilt  : {fixed_tilt:.1f}°  (south-facing, azimuth 180°)")
-    print(f"  PVGIS DB    : {args.raddatabase}  year {args.year}")
-    print(f"  Cache       : {'disabled' if args.no_cache else 'enabled'}")
-    print("=" * 62)
 
-    # Shared kwargs forwarded to every simulation / sweep call
+
     common = dict(
         months=args.months,
         start_hour=args.start,
@@ -105,59 +107,117 @@ def main():
         efficiency=args.efficiency,
         year=args.year,
         raddatabase=args.raddatabase,
+        use_cache=not args.no_cache,
     )
-    use_cache = not args.no_cache
-    common["use_cache"] = use_cache
 
-    # --- Define systems ---
-    systems = {
-        "Fixed":       fixed_system(tilt_deg=fixed_tilt),
-        "Single-Axis": single_axis_system(axis_tilt_deg=fixed_tilt),
-        "Dual-Axis":   dual_axis_system(),
-    }
+    # -----------------------------------------------------------------------
+    # 1. Build scenario groups
+    # -----------------------------------------------------------------------
+    scenario_groups = build_scenario_groups(fixed_tilt, common)
 
-    # --- Run simulations ---
-    results: dict[str, pd.DataFrame] = {}
-    for name, cfg in systems.items():
-        print(f"\n  Simulating {name}...", end="", flush=True)
-        df = run_simulation(cfg, **common)
-        results[name] = df
-        total_kwh = df["energy_wh"].sum() / 1000.0
-        print(f"  → {total_kwh:.3f} kWh")
+    print("=" * 62)
+    print("  Solar Panel kWh Comparison Tool  (PVGIS data source)")
+    print("=" * 62)
+    print(f"  Location       : {common["latitude"]}°N, {common["longitude"]}°E")
+    print(f"  Months         : {common["months"]}")
+    print(f"  Hours (UTC)    : {common["start_hour"]:04.1f} – {common["end_hour"]:04.1f}")
+    print(f"  Panel          : {args.area} m²   efficiency {args.efficiency * 100:.0f}%")
+    print(f"  PVGIS DB       : {args.raddatabase}  year {args.year}")
+    print(f"  Cache          : {'disabled' if args.no_cache else 'enabled'}")
+    print("=" * 62)
 
-    # --- Summary table ---
+    # -----------------------------------------------------------------------
+    # 2. Simulate — deduplicated across groups
+    #    Systems that appear in multiple groups (Fixed, Single-Axis, Dual-Axis)
+    #    are only fetched / computed once.
+    # -----------------------------------------------------------------------
+    sim_cache: dict[str, pd.DataFrame] = {}
+    group_results: dict[str, dict[str, pd.DataFrame]] = {}
+
+    for group_name, systems in scenario_groups.items():
+        group_results[group_name] = {}
+        for sys_name, cfg in systems.items():
+            if sys_name not in sim_cache:
+                print(f"\n  Simulating {sys_name}...", end="", flush=True)
+                sim_cache[sys_name] = run_simulation(cfg, **common)
+                kwh = sim_cache[sys_name]["energy_wh"].sum() / 1000.0
+                print(f"  → {kwh:.3f} kWh")
+            group_results[group_name][sys_name] = sim_cache[sys_name]
+
+    # -----------------------------------------------------------------------
+    # 3. Summary tables
+    # -----------------------------------------------------------------------
     print()
-    print(f"  {'System':<14} {'Total kWh':>10} {'vs Fixed':>10}")
-    print(f"  {'-'*38}")
-    fixed_kwh = results["Fixed"]["energy_wh"].sum() / 1000.0
-    for name, df in results.items():
-        kwh = df["energy_wh"].sum() / 1000.0
-        gain = (kwh / fixed_kwh - 1) * 100 if fixed_kwh > 0 else 0.0
-        gain_str = f"+{gain:.1f}%" if gain >= 0 else f"{gain:.1f}%"
-        print(f"  {name:<14} {kwh:>10.3f} {gain_str:>10}")
+    for group_name, results in group_results.items():
+        _print_summary_table(group_name, results)
     print()
 
-    # --- Tilt sweep ---
-    optimal_tilt = fixed_tilt
+    # -----------------------------------------------------------------------
+    # 4. Tilt sweeps (optional)
+    # -----------------------------------------------------------------------
+    sweep_results: dict[str, tuple[pd.DataFrame, float]] = {}   # name → (df, optimal_tilt)
+
     if not args.no_sweep:
-        print("  Running tilt sweep (one PVGIS request per tilt angle)...")
-        sweep_df = tilt_sweep(
-            **common,
-            tilt_min=args.tilt_min,
-            tilt_max=args.tilt_max,
-            tilt_step=args.tilt_step,
-        )
-        optimal_tilt = float(sweep_df.loc[sweep_df["total_kwh"].idxmax(), "tilt_deg"])
-        print(f"\n  Optimal fixed tilt (south-facing): {optimal_tilt:.0f}°")
-        print()
+        # Fixed south-facing sweep
+        print("  Running Fixed tilt sweep...")
+        fixed_sweep_df = tilt_sweep(**common,
+                                    tilt_min=args.tilt_min,
+                                    tilt_max=args.tilt_max,
+                                    tilt_step=args.tilt_step)
+        opt_fixed = float(fixed_sweep_df.loc[fixed_sweep_df["total_kwh"].idxmax(), "tilt_deg"])
+        sweep_results["Fixed"] = (fixed_sweep_df, opt_fixed)
+        print(f"  Optimal Fixed tilt (south-facing): {opt_fixed:.0f}°\n")
 
-    # --- Plots ---
+        # Tractor E-W sweep
+        print("  Running Tractor E→W tilt sweep...")
+        ew_factory = lambda t: tractor_system(tilt_deg=t, forward_azimuth_deg_from_north=90)
+        ew_sweep_df = tilt_sweep(system_factory=ew_factory, **common,
+                                 tilt_min=args.tilt_min,
+                                 tilt_max=args.tilt_max,
+                                 tilt_step=args.tilt_step)
+        opt_ew = float(ew_sweep_df.loc[ew_sweep_df["total_kwh"].idxmax(), "tilt_deg"])
+        sweep_results["Tractor E→W"] = (ew_sweep_df, opt_ew)
+        print(f"  Optimal Tractor E→W tilt: {opt_ew:.0f}°\n")
+
+        # Tractor N-S sweep
+        print("  Running Tractor N→S tilt sweep...")
+        ns_factory = lambda t: tractor_system(tilt_deg=t, forward_azimuth_deg_from_north=0)
+        ns_sweep_df = tilt_sweep(system_factory=ns_factory, **common,
+                                 tilt_min=args.tilt_min,
+                                 tilt_max=args.tilt_max,
+                                 tilt_step=args.tilt_step)
+        opt_ns = float(ns_sweep_df.loc[ns_sweep_df["total_kwh"].idxmax(), "tilt_deg"])
+        sweep_results["Tractor N→S"] = (ns_sweep_df, opt_ns)
+        print(f"  Optimal Tractor N→S tilt: {opt_ns:.0f}°\n")
+
+    # -----------------------------------------------------------------------
+    # 5. Plots — one set per scenario group
+    # -----------------------------------------------------------------------
     print("  Generating plots...")
-    plot.plot_summary(results)
-    plot.plot_monthly_breakdown(results, args.months)
+
+    for group_name, results in group_results.items():
+        title_base = group_name.replace("_", " ").title()
+
+        plot.plot_summary(
+            results,
+            title=f"Total Energy — {title_base}",
+        )
+        plot.plot_monthly_breakdown(
+            results,
+            common["months"],  # ← was args.months
+            title=f"Monthly Breakdown — {title_base}",
+        )
+        plot.plot_daily_curve(
+            results,
+            args.months,
+            title=f"Average Daily Power Curve — {title_base}",
+        )
+
     if not args.no_sweep:
-        plot.plot_tilt_sweep(sweep_df, optimal_tilt)
-    plot.plot_daily_curve(results, args.months)
+        sweeps      = {k: v[0] for k, v in sweep_results.items()}
+        opt_tilts   = {k: v[1] for k, v in sweep_results.items()}
+        plot.plot_tilt_sweep(sweeps, opt_tilts)
+
     print("  Done.")
 
 
