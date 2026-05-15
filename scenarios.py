@@ -19,10 +19,28 @@ def _vehicle_systems(forward_azimuth: float, label: str) -> dict:
     }
 
 
+def single_axis_comparison(latitude: float) -> dict:
+    """
+    Compares the three main single-axis tracker types against fixed-tilt
+    and dual-axis baselines. All tilt/axis angles use latitude as the
+    optimal value, consistent with the text.
+
+    HSAT  – trackingtype=1, axis horizontal (angle=0), N-S aligned
+    VSAT  – trackingtype=3, module tilt = latitude (optimal fixed tilt on vertical axis)
+    PSAT  – trackingtype=5, axis tilt = latitude (polar-aligned inclined axis)
+    """
+    return {
+        "Fixed":     SystemConfig("Fixed",    trackingtype=0, angle=latitude,  aspect=0.0),
+        "HSAT":      SystemConfig("HSAT",     trackingtype=1, angle=0.0,       aspect=0.0),
+        "VSAT":      SystemConfig("VSAT",     trackingtype=3, angle=latitude,  aspect=0.0),
+        "PSAT":      SystemConfig("PSAT",     trackingtype=5, angle=latitude,  aspect=0.0),
+        #"Dual-Axis": dual_axis_system(),
+    }
+
 def build_scenario_groups(fixed_tilt: float, common: dict) -> dict:
 
-    common["latitude"]   = 65
-    common["longitude"]  = 15
+    common["latitude"]   = 10
+    common["longitude"]  = 5
     common["months"]     = [1,2,3,4,5,6,7,8,9,10,11,12]
     common["start_hour"] = 6.0
     common["end_hour"]   = 20.0
@@ -43,28 +61,12 @@ def build_scenario_groups(fixed_tilt: float, common: dict) -> dict:
     ew_vehicle = _vehicle_systems(forward_azimuth=90, label="EW")   # drives E↔W
     ns_vehicle = _vehicle_systems(forward_azimuth=0, label="NS")    # drives N↔S
 
+
     return {
         "vehicle_ns": {
             **ns_vehicle,
         },
 
+        "single_axis_comparison": single_axis_comparison(latitude=common["latitude"]),
 
-        #"stationary": base,
-
-        #"vehicle_orientations": {
-        #    "EW Flat": ew_vehicle["EW Flat"],
-        #    "EW Rear": ew_vehicle["EW Rear"],
-        #    "EW Side": ew_vehicle["EW Side"],
-        #},
-
-        #"vehicle_ew": {
-        #
-        #    **ew_vehicle,   # adds Flat, Rear, Side — named relative to EW driving
-        #},
-
-
-
-
-
-        #"vehicle_tracking": vehicle_tracking,
     }

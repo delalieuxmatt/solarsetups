@@ -26,36 +26,44 @@ from typing import Sequence
 # KU Leuven Official Brand Palette
 # ---------------------------------------------------------------------------
 
-# KU Leuven blue ramp — dark to light, all readable, none too pale
 _KUL_BLUES = {
     1: "#00407A",   # KUL primary dark blue
-    2: "#185FA5",   # strong mid blue
-    3: "#378ADD",   # standard blue
-    4: "#52BDEC",   # KUL light blue
-    5: "#85B7EB",   # soft blue — lightest allowed
+    2: "#185FA5",
+    3: "#378ADD",
+    4: "#52BDEC",
+    5: "#85B7EB",
+}
+
+# A warm ramp to contrast the tracker types against the blue anchors
+_KUL_WARM = {
+    1: "#8B2000",   # deep rust
+    2: "#C23B00",   # burnt orange
+    3: "#E8720C",   # amber
 }
 
 SYSTEM_COLORS = {
-    # Stationary — 3 systems, spread across the ramp
-    "Fixed":              _KUL_BLUES[1],
-    "Single-Axis":        _KUL_BLUES[3],
-    "Dual-Axis":          _KUL_BLUES[5],
+    # Baselines — blue anchors, visually frame the comparison
+    "Fixed":           _KUL_BLUES[1],   # darkest blue
+    "Dual-Axis":       _KUL_BLUES[4],   # light blue ceiling
 
-    # Vehicle orientations — 3 systems, same ramp positions
-    "EW Flat":            _KUL_BLUES[5],
-    "EW Rear":            _KUL_BLUES[3],
-    "EW Side":            _KUL_BLUES[1],
+    # Single-axis trackers — warm ramp, clearly distinct from baselines
+    "HSAT":            _KUL_WARM[1],
+    "VSAT":            _KUL_WARM[2],
+    "PSAT":            _KUL_WARM[3],
 
-    "NS Flat":            _KUL_BLUES[5],
-    "NS Rear":            _KUL_BLUES[3],
-    "NS Side":            _KUL_BLUES[1],
+    # Vehicle orientations
+    "EW Flat":         _KUL_BLUES[5],
+    "EW Rear":         _KUL_BLUES[3],
+    "EW Side":         _KUL_BLUES[1],
+    "NS Flat":         _KUL_BLUES[5],
+    "NS Rear":         _KUL_BLUES[3],
+    "NS Side":         _KUL_BLUES[1],
 
-    # Vehicle tracking — 3 systems
-    "Dual-Axis":          _KUL_BLUES[1],
-    "Single-Axis NS":     _KUL_BLUES[3],
-    "Single-Axis EW":     _KUL_BLUES[5],
+    # Vehicle tracking
+    "Single-Axis NS":  _KUL_BLUES[3],
+    "Single-Axis EW":  _KUL_BLUES[5],
+    "Single-Axis":     _KUL_BLUES[3],
 }
-
 BACKGROUND  = "#FFFFFF"
 PANEL_BG    = "#FFFFFF"
 TEXT_COLOR  = "#222222"

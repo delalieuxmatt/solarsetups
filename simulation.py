@@ -67,6 +67,7 @@ def tractor_system(tilt_deg: float, forward_azimuth_deg_from_north: float = 90.0
     aspect = forward_azimuth_deg_from_north - 180.0
     return SystemConfig("Tractor", trackingtype=0, angle=tilt_deg, aspect=aspect, bidirectional=True)
 
+
 def fixed_system(tilt_deg: float, azimuth_deg_from_north: float = 180.0) -> SystemConfig:
     """
     Return a SystemConfig for a fixed panel.
