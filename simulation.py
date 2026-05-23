@@ -244,3 +244,68 @@ def tilt_sweep(
         time.sleep(1.0)
 
     return pd.DataFrame(records)
+
+
+# ---------------------------------------------------------------------------
+# Latitude sweep
+# ---------------------------------------------------------------------------
+
+def latitude_sweep(
+    *,
+    months: Sequence[int],
+    start_hour: float,
+    end_hour: float,
+    longitude: float,
+    panel_area_m2: float = 1.0,
+    efficiency: float = 0.20,
+    lat_min: float = 0.0,
+    lat_max: float = 65.0,
+    lat_step: float = 5.0,
+    year: int = pvgis_client.DEFAULT_YEAR,
+    raddatabase: str = pvgis_client.DEFAULT_DB,
+    use_cache: bool = True,
+) -> pd.DataFrame:
+    """
+    Sweep latitudes and simulate all five tracking systems at each latitude.
+
+    Systems simulated per latitude (matching single_axis_comparison):
+        Fixed, HSAT, VSAT, PSAT, Dual-Axis
+
+    For Fixed / VSAT / PSAT the optimal tilt = latitude is used automatically,
+    consistent with single_axis_comparison().
+
+    Returns a DataFrame with columns:
+        latitude, system, total_kwh
+    """
+    from scenarios import single_axis_comparison   # local import — avoids circular dep
+
+    latitudes = np.arange(lat_min, lat_max + lat_step / 2, lat_step)
+    records: list[dict] = []
+
+    common_sim = dict(
+        months=months,
+        start_hour=start_hour,
+        end_hour=end_hour,
+        longitude=longitude,
+        panel_area_m2=panel_area_m2,
+        efficiency=efficiency,
+        year=year,
+        raddatabase=raddatabase,
+        use_cache=use_cache,
+    )
+
+    for lat in latitudes:
+        lat = float(lat)
+        systems = single_axis_comparison(latitude=lat)
+        print(f"  lat {lat:+6.1f}°", end="", flush=True)
+
+        for sys_name, cfg in systems.items():
+            sim = run_simulation(cfg, latitude=lat, **common_sim)
+            total_kwh = sim["energy_wh"].sum() / 1000.0
+            records.append({"latitude": lat, "system": sys_name, "total_kwh": total_kwh})
+            print(f"  {sys_name}={total_kwh:.2f}", end="", flush=True)
+            time.sleep(0.3)   # be gentle with PVGIS
+
+        print()  # newline after each latitude row
+
+    return pd.DataFrame(records)

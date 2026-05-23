@@ -14,9 +14,10 @@ import pandas as pd
 from simulation import (
     run_simulation,
     tilt_sweep,
+    latitude_sweep,
     tractor_system,
 )
-from scenarios import build_scenario_groups
+from scenarios import build_scenario_groups, LAT_SWEEP_CONFIG
 import pvgis_client
 import plot
 
@@ -54,6 +55,8 @@ def parse_args():
                    help="Tilt sweep step size (default: 5°)")
     p.add_argument("--no-sweep",    action="store_true",
                    help="Skip the tilt sweep analysis")
+    p.add_argument("--no-lat-sweep", action="store_true",
+                   help="Skip the latitude sweep analysis")
     p.add_argument("--year",        type=int, default=pvgis_client.DEFAULT_YEAR,
                    help=f"PVGIS data year (default: {pvgis_client.DEFAULT_YEAR})")
     p.add_argument("--raddatabase", type=str, default=pvgis_client.DEFAULT_DB,
@@ -194,29 +197,60 @@ def main():
     # 5. Plots — one set per scenario group
     # -----------------------------------------------------------------------
     print("  Generating plots...")
+    if True == False:
+        for group_name, results in group_results.items():
+            title_base = group_name.replace("_", " ").title()
 
-    for group_name, results in group_results.items():
-        title_base = group_name.replace("_", " ").title()
-
-        plot.plot_summary(
-            results,
-            title=f"Total Energy — {title_base}",
-        )
-        plot.plot_monthly_breakdown(
-            results,
-            common["months"],  # ← was args.months
-            title=f"Monthly Breakdown — {title_base}",
-        )
-        plot.plot_daily_curve(
-            results,
-            args.months,
-            title=f"Average Daily Power Curve — {title_base}",
-        )
+            plot.plot_summary(
+                results,
+                title=f"Total Energy — {title_base}",
+            )
+            plot.plot_monthly_breakdown(
+                results,
+                common["months"],  # ← was args.months
+                title=f"Monthly Breakdown — {title_base}",
+            )
+            plot.plot_daily_curve(
+                results,
+                args.months,
+                title=f"Average Daily Power Curve — {title_base}",
+            )
 
     if not args.no_sweep:
         sweeps      = {k: v[0] for k, v in sweep_results.items()}
         opt_tilts   = {k: v[1] for k, v in sweep_results.items()}
         plot.plot_tilt_sweep(sweeps, opt_tilts)
+
+    # -----------------------------------------------------------------------
+    # 6. Latitude sweep — energy vs latitude for all tracking systems
+    # -----------------------------------------------------------------------
+    if not args.no_lat_sweep:
+        cfg = LAT_SWEEP_CONFIG
+        print("  Running latitude sweep "
+              f"({cfg['lat_min']}°–{cfg['lat_max']}°N, step {cfg['lat_step']}°, "
+              f"lon={cfg['longitude']}°, months={cfg['months']})...")
+        lat_df = latitude_sweep(
+            months=cfg["months"],
+            start_hour=cfg["start_hour"],
+            end_hour=cfg["end_hour"],
+            longitude=cfg["longitude"],
+            lat_min=cfg["lat_min"],
+            lat_max=cfg["lat_max"],
+            lat_step=cfg["lat_step"],
+            panel_area_m2=args.area,
+            efficiency=args.efficiency,
+            year=args.year,
+            raddatabase=args.raddatabase,
+            use_cache=not args.no_cache,
+        )
+        months_label = (
+            "Full year" if cfg["months"] == list(range(1, 13))
+            else f"Months {cfg['months']}"
+        )
+        plot.plot_latitude_sweep(
+            lat_df,
+            title=f"Total Energy vs Latitude — {months_label}",
+        )
 
     print("  Done.")
 

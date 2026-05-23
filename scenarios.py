@@ -63,10 +63,23 @@ def build_scenario_groups(fixed_tilt: float, common: dict) -> dict:
 
 
     return {
-        "vehicle_ns": {
-            **ns_vehicle,
-        },
 
         "single_axis_comparison": single_axis_comparison(latitude=common["latitude"]),
 
     }
+
+# ---------------------------------------------------------------------------
+# Latitude sweep configuration
+# ---------------------------------------------------------------------------
+# Edit these values to control the latitude sweep behaviour.
+# The sweep runs for every system in single_axis_comparison().
+
+LAT_SWEEP_CONFIG = {
+    "lat_min":    0,    # southernmost latitude to simulate (°N)
+    "lat_max":   55.0,    # northernmost latitude to simulate (°N)
+    "lat_step":   5.0,    # step size in degrees
+    "longitude":  25.0,    # fixed longitude used for all latitudes
+    "months":  [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12],  # full year
+    "start_hour": 6.0,
+    "end_hour":  20.0,
+}

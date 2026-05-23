@@ -288,3 +288,53 @@ def plot_daily_curve(
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
+
+# ---------------------------------------------------------------------------
+# 5. Latitude sweep — energy vs latitude per tracking system
+# ---------------------------------------------------------------------------
+
+def plot_latitude_sweep(
+    df: "pd.DataFrame",
+    title: str = "Total Energy vs Latitude by Tracking System",
+    save_path: "str | None" = None,
+) -> None:
+    """
+    Line chart of total kWh vs latitude, one line per tracking system.
+
+    Parameters
+    ----------
+    df : DataFrame returned by simulation.latitude_sweep()
+        Columns: latitude, system, total_kwh
+    """
+    systems = df["system"].unique()
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    for sys_name in systems:
+        sub = df[df["system"] == sys_name].sort_values("latitude")
+        ax.plot(
+            sub["latitude"], sub["total_kwh"],
+            label=sys_name,
+            color=_get_color(sys_name),
+            linewidth=2.5,
+            marker="o",
+            markersize=5,
+        )
+        ax.fill_between(
+            sub["latitude"], sub["total_kwh"],
+            alpha=0.06,
+            color=_get_color(sys_name),
+        )
+
+    ax.set_xlabel("Latitude (°N)")
+    ax.set_ylabel("Total Energy (kWh)")
+    ax.set_title(title, pad=12)
+    ax.legend(frameon=False, labelcolor=TEXT_COLOR)
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(5))
+
+    _apply_thesis_style(fig, [ax])
+
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()
