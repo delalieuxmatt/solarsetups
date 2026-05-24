@@ -338,3 +338,136 @@ def plot_latitude_sweep(
     if save_path:
         fig.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
+
+
+# ---------------------------------------------------------------------------
+# 6. Shading Geometry Sanity Check
+# ---------------------------------------------------------------------------
+
+def plot_shading_sanity_check(
+        lat: float,
+        lon: float,
+        H_flap: float,
+        L_flap: float,
+        d_flap: float,
+        L_front: float = 1.5,
+        d_front: float = 2.04,
+        L_back:  float = 1.5,
+        d_back:  float = 2.66,
+        months: list[int] | None = None,
+        save_path: str | None = None,
+) -> None:
+    """
+    Thesis-ready sanity check plot for the two-panel shading model.
+
+    Single axes with a stacked-area fill showing each panel's contribution
+    to the combined daily average shaded area, plus a right-hand y-axis
+    for the shade fraction of total panel area.
+
+    Each hour is split evenly between the two driving directions:
+      - 50 % driving North → front panel (cab side) is shaded
+      - 50 % driving South → back panel (engine side) is shaded
+
+    The stacked bands each represent 50 % of one panel's shadow, so their
+    sum equals the combined average shaded area at every hour.
+
+    The dotted reference line marks the total panel area ceiling — the
+    shaded area must always stay below it (a useful sanity check).
+
+    Side strips on the back panel ((d_back − d_flap)/2 on each side) are
+    never shaded; the shadow width is bounded by d_flap.
+
+    Save to figs/sanity_check.png by passing save_path='figs/sanity_check.png'.
+    """
+    import irradiance as irr
+    import pandas as pd
+
+    # Build the set of day-of-year values for the requested months only.
+    # This ensures the declination angle (and thus shadow length) reflects
+    # the actual season being simulated rather than a full-year average.
+    if months is None:
+        months = list(range(1, 13))
+    _dates = pd.date_range("2023-01-01", "2023-12-31", freq="D")
+    days = _dates[_dates.month.isin(months)].day_of_year.to_numpy(dtype=float)
+
+    hours = np.linspace(6, 20, 200)
+
+    A_front = L_front * d_front
+    A_back  = L_back  * d_back
+    A_total = A_front + A_back
+
+    # Max possible shadow on each panel (shadow width bounded by d_flap)
+    A_front_max = L_front * d_front   # d_front == d_flap, no overhang
+    A_back_max  = L_back  * d_flap    # side strips (d_back - d_flap) always clear
+
+    # Per-hour annual-mean shaded areas for each driving direction
+    shaded_front_mean = np.zeros(len(hours))   # driving North  → front shaded
+    shaded_back_mean  = np.zeros(len(hours))   # driving South  → back shaded
+
+    for i, h in enumerate(hours):
+        decl  = irr.solar_declination(days)
+        omega = irr.hour_angle(h, lon, days)
+        alpha = irr.solar_altitude_rad(lat, decl, omega)
+        theta = irr.solar_azimuth_from_south_rad(lat, decl, omega, alpha)
+
+        mask = (alpha <= 0.0) | (np.abs(theta) > (np.pi / 2.0))
+
+        L_sh_front = irr._shadow_length(alpha, H_flap, L_flap, L_front)
+        L_sh_back  = irr._shadow_length(alpha, H_flap, L_flap, L_back)
+
+        # Driving North → front panel shaded
+        A_fn = irr._parallelogram_shaded_area(L_sh_front, theta, d_flap)
+        A_fn = np.clip(A_fn, 0.0, A_front_max)
+        A_fn = np.where(mask, 0.0, A_fn)
+
+        # Driving South → back panel shaded
+        A_bs = irr._parallelogram_shaded_area(L_sh_back, theta, d_flap)
+        A_bs = np.clip(A_bs, 0.0, A_back_max)
+        A_bs = np.where(mask, 0.0, A_bs)
+
+        # Each direction covers 50 % of operating time
+        shaded_front_mean[i] = np.mean(A_fn) * 0.5
+        shaded_back_mean[i]  = np.mean(A_bs) * 0.5
+
+    combined_mean = shaded_front_mean + shaded_back_mean
+    combined_frac = combined_mean / A_total * 100.0
+
+    # ------------------------------------------------------------------ #
+    # Single axes with right-hand fraction axis                           #
+    # ------------------------------------------------------------------ #
+    fig, ax = plt.subplots(figsize=(10, 5))
+
+    # Single combined shaded area (average over both driving directions)
+    ax.fill_between(hours, combined_mean, alpha=0.25, color=_KUL_BLUES[2])
+    ax.plot(hours, combined_mean, color=_KUL_BLUES[2], lw=2.0,
+            label="Combined average shaded area (50% North, 50% South)")
+
+    # Total panel area ceiling
+    ax.axhline(A_total, color="#888888", lw=1.0, linestyle=":",
+               label=f"Total panel area = {A_total:.2f} m²  "
+                     f"(front {A_front:.2f} + back {A_back:.2f})")
+
+    ax.set_xlabel("Hour of Day (UTC)")
+    ax.set_ylabel("Average Shaded Area (m²)")
+    ax.set_xlim(6, 18)
+    ax.set_ylim(0, A_total * 1.15)
+    ax.xaxis.set_major_locator(mticker.MultipleLocator(2))
+    ax.legend(frameon=False, labelcolor=TEXT_COLOR, fontsize=9,
+              loc="upper left")
+
+    # Right-hand axis: shade fraction scale (mirrors the left axis curve)
+    ax_r = ax.twinx()
+    ax_r.set_ylim(0, 1.15 * 100)
+    ax_r.set_ylabel("Combined shade fraction (%)", color=TEXT_COLOR)
+    ax_r.tick_params(colors=TEXT_COLOR, labelsize=10)
+    ax_r.spines["top"].set_visible(False)
+    ax_r.spines["right"].set_color("#555555")
+    ax_r.spines["left"].set_visible(False)
+
+    _apply_thesis_style(fig, [ax])
+    ax.grid(color=GRID_COLOR, linewidth=0.5, linestyle=":")
+
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()

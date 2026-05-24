@@ -63,6 +63,9 @@ def parse_args():
                    help=f"PVGIS radiation DB (default: {pvgis_client.DEFAULT_DB})")
     p.add_argument("--no-cache",    action="store_true",
                    help="Disable PVGIS response caching")
+    # Add this line right before return p.parse_args():
+    p.add_argument("--shading-sanity", action="store_true",
+                   help="Plot the shading geometry sanity check and exit")
     return p.parse_args()
 
 
@@ -94,11 +97,27 @@ def _print_summary_table(group_name: str, results: dict[str, pd.DataFrame]) -> N
 
 def main():
     args = parse_args()
+    # --- ADD THIS BLOCK ---
+    if args.shading_sanity:
+        from scenarios import H_FLAP, L_FLAP, D_FLAP, L_FRONT, D_FRONT, L_BACK, D_BACK
+        print(f"  Generating shading sanity check plot for Lat={args.lat}°, Lon={args.lon}°...")
+        plot.plot_shading_sanity_check(
+            lat     = args.lat,
+            lon     = args.lon,
+            months = args.months,
+            H_flap  = H_FLAP,
+            L_flap  = L_FLAP,
+            d_flap  = D_FLAP,
+            L_front = L_FRONT,
+            d_front = D_FRONT,
+            L_back  = L_BACK,
+            d_back  = D_BACK,
+        )
+        return
+    # ----------------------
 
     fixed_tilt = args.tilt if args.tilt is not None else round(abs(args.lat))
     print("Fixed tilt is:", fixed_tilt)
-
-
 
     common = dict(
         months=args.months,
