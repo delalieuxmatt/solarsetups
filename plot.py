@@ -55,9 +55,9 @@ SYSTEM_COLORS = {
     "EW Flat":         _KUL_BLUES[5],
     "EW Rear":         _KUL_BLUES[3],
     "EW Side":         _KUL_BLUES[1],
-    "NS Flat":         _KUL_BLUES[5],
+    "NS Flat (shaded)":         _KUL_BLUES[5],
     "NS Rear":         _KUL_BLUES[3],
-    "NS Side":         _KUL_BLUES[1],
+    "NS Sides":         _KUL_BLUES[1],
 
     # Vehicle tracking
     "Single-Axis NS":  _KUL_BLUES[3],
@@ -469,6 +469,53 @@ def plot_shading_sanity_check(
 
     _apply_thesis_style(fig, [ax])
     ax.grid(color=GRID_COLOR, linewidth=0.5, linestyle=":")
+
+    fig.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=300, bbox_inches="tight")
+    plt.show()
+
+
+# ---------------------------------------------------------------------------
+# 7. Yearly breakdown
+# ---------------------------------------------------------------------------
+
+def plot_yearly_breakdown(
+        results: dict[str, pd.DataFrame],
+        years: Sequence[int],
+        title: str = "Yearly Energy Breakdown by System",
+        save_path: str | None = None,
+) -> None:
+    """Bar chart comparing total kWh per system per year."""
+    selected = sorted(years)
+    n_years = len(selected)
+    n_systems = len(results)
+    width = 0.8 / n_systems
+    x = np.arange(n_years)
+
+    fig, ax = plt.subplots(figsize=(10, 4.5))
+
+    for i, (name, df) in enumerate(results.items()):
+        if "sim_year" not in df.columns:
+            continue
+
+        yearly_kwh = [
+            df[df["sim_year"] == y]["energy_wh"].sum() / 1000.0 for y in selected
+        ]
+        offset = (i - n_systems / 2 + 0.5) * width
+        ax.bar(
+            x + offset, yearly_kwh, width=width * 0.9,
+            label=name, color=_get_color(name), edgecolor="none",
+        )
+
+    ax.set_xticks(x)
+    ax.set_xticklabels([str(y) for y in selected])
+    ax.set_ylabel("Energy (kWh)")
+    ax.set_title(title, pad=12)
+    ax.legend(frameon=False, labelcolor=TEXT_COLOR)
+
+    _apply_thesis_style(fig, [ax])
+    ax.grid(False, axis="y")
 
     fig.tight_layout()
     if save_path:

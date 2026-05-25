@@ -13,6 +13,7 @@ import pandas as pd
 
 from simulation import (
     run_simulation,
+    run_multi_year_simulation,
     tilt_sweep,
     latitude_sweep,
     tractor_system,
@@ -61,6 +62,10 @@ def parse_args():
                    help=f"PVGIS data year (default: {pvgis_client.DEFAULT_YEAR})")
     p.add_argument("--raddatabase", type=str, default=pvgis_client.DEFAULT_DB,
                    help=f"PVGIS radiation DB (default: {pvgis_client.DEFAULT_DB})")
+    p.add_argument("--years", type=int, nargs="+", default=None,
+                   help="List of years to simulate (overrides --year)")
+    p.add_argument("--degradation", type=float, default=0.0,
+                   help="Annual degradation factor (e.g. 0.02 for 2%% per year)")
     p.add_argument("--no-cache",    action="store_true",
                    help="Disable PVGIS response caching")
     # Add this line right before return p.parse_args():
@@ -161,7 +166,17 @@ def main():
         for sys_name, cfg in systems.items():
             if sys_name not in sim_cache:
                 print(f"\n  Simulating {sys_name}...", end="", flush=True)
-                sim_cache[sys_name] = run_simulation(cfg, **common)
+
+                if args.years:
+                    # Remove 'year' from common so it doesn't conflict with kwargs
+                    multi_kwargs = common.copy()
+                    multi_kwargs.pop("year", None)
+                    sim_cache[sys_name] = run_multi_year_simulation(
+                        cfg, years=args.years, degradation_factor=args.degradation, **multi_kwargs
+                    )
+                else:
+                    sim_cache[sys_name] = run_simulation(cfg, **common)
+
                 kwh = sim_cache[sys_name]["energy_wh"].sum() / 1000.0
                 print(f"  → {kwh:.3f} kWh")
             group_results[group_name][sys_name] = sim_cache[sys_name]
@@ -216,6 +231,14 @@ def main():
     # 5. Plots — one set per scenario group
     # -----------------------------------------------------------------------
     print("  Generating plots...")
+    if args.years:
+        for group_name, results in group_results.items():
+            title_base = group_name.replace("_", " ").title()
+            plot.plot_yearly_breakdown(
+                results,
+                args.years,
+                title=f"Yearly Breakdown — {title_base}"
+            )
     if True == False:
         for group_name, results in group_results.items():
             title_base = group_name.replace("_", " ").title()

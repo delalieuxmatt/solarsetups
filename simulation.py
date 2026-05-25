@@ -412,6 +412,36 @@ def run_simulation(
     return df[cols].reset_index(drop=True)
 
 
+def run_multi_year_simulation(
+        system: SystemConfig,
+        *,
+        years: Sequence[int],
+        degradation_factor: float = 0.0,
+        **kwargs
+) -> pd.DataFrame:
+    """
+    Simulate energy production over multiple years with an annual degradation factor.
+    """
+    dfs = []
+    # Sort years to ensure degradation is applied chronologically
+    sorted_years = sorted(years)
+
+    for i, y in enumerate(sorted_years):
+        # Run standard simulation for the specific year
+        df = run_simulation(system, year=y, **kwargs)
+
+        # Apply degradation factor relative to the first year: (1 - degradation_factor)^i
+        current_degradation = (1.0 - degradation_factor) ** i
+        df["power_w"] = df["power_w"] * current_degradation
+        df["energy_wh"] = df["energy_wh"] * current_degradation
+
+        # Tag the DataFrame with the simulated year
+        df["sim_year"] = y
+        dfs.append(df)
+
+    # Concatenate all years into a single DataFrame
+    return pd.concat(dfs, ignore_index=True)
+
 # ---------------------------------------------------------------------------
 # Tilt sweep
 # ---------------------------------------------------------------------------
