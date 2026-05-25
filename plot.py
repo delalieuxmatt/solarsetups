@@ -436,6 +436,7 @@ def plot_shading_sanity_check(
     # Single axes with right-hand fraction axis                           #
     # ------------------------------------------------------------------ #
     fig, ax = plt.subplots(figsize=(10, 5))
+    fs = 14
 
     # Single combined shaded area (average over both driving directions)
     ax.fill_between(hours, combined_mean, alpha=0.25, color=_KUL_BLUES[2])
@@ -443,23 +444,25 @@ def plot_shading_sanity_check(
             label="Combined average shaded area (50% North, 50% South)")
 
     # Total panel area ceiling
-    ax.axhline(A_total, color="#888888", lw=1.0, linestyle=":",
-               label=f"Total panel area = {A_total:.2f} m²  "
+    ax.axhline(A_total, color="#FFA500", lw=1.0, linestyle="dashdot",
+               label=f"Unshaded panel area = {A_total:.2f} m²  "
                      f"(front {A_front:.2f} + back {A_back:.2f})")
 
-    ax.set_xlabel("Hour of Day (UTC)")
-    ax.set_ylabel("Average Shaded Area (m²)")
+    ax.set_xlabel("Hour of Day (UTC)", fontsize=fs)
+    ax.set_ylabel("Average Shaded Area (m²)", fontsize = fs)
     ax.set_xlim(6, 18)
-    ax.set_ylim(0, A_total * 1.15)
+    ax.set_ylim(0, A_total * 1.25)
+    ax.set_yticks([0, 2, 4, 6, 8])
     ax.xaxis.set_major_locator(mticker.MultipleLocator(2))
-    ax.legend(frameon=False, labelcolor=TEXT_COLOR, fontsize=9,
+    ax.legend(frameon=False, labelcolor=TEXT_COLOR, fontsize=fs-2,
               loc="upper left")
 
     # Right-hand axis: shade fraction scale (mirrors the left axis curve)
     ax_r = ax.twinx()
-    ax_r.set_ylim(0, 1.15 * 100)
-    ax_r.set_ylabel("Combined shade fraction (%)", color=TEXT_COLOR)
-    ax_r.tick_params(colors=TEXT_COLOR, labelsize=10)
+    ax_r.set_ylim(0, 1.25 * 100)
+    ax_r.set_ylabel("Combined shade fraction (%)", color=TEXT_COLOR, fontsize = fs)
+    ax_r.set_yticks([0, 20, 40, 60, 80, 100])
+    ax_r.tick_params(colors=TEXT_COLOR, labelsize=fs-2)
     ax_r.spines["top"].set_visible(False)
     ax_r.spines["right"].set_color("#555555")
     ax_r.spines["left"].set_visible(False)

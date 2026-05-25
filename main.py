@@ -45,7 +45,7 @@ def parse_args():
                    help="Fixed tilt in degrees (default: auto = latitude)")
     p.add_argument("--area",        type=float, default=1.0,
                    help="Panel area in m² (default: 1.0)")
-    p.add_argument("--efficiency",  type=float, default=0.20,
+    p.add_argument("--efficiency",  type=float, default=0.15,
                    help="Panel efficiency 0-1 (default: 0.20)")
     p.add_argument("--tilt-min",    type=float, default=0.0,
                    help="Tilt sweep start (default: 0°)")
@@ -226,7 +226,7 @@ def main():
             )
             plot.plot_monthly_breakdown(
                 results,
-                common["months"],  # ← was args.months
+                common["months"],
                 title=f"Monthly Breakdown — {title_base}",
             )
             plot.plot_daily_curve(

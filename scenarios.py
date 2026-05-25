@@ -90,19 +90,16 @@ def ns_vehicle_systems(shade_params: ShadeParams = DEFAULT_SHADE) -> dict:
     """
     All panels mounted on a vehicle driving N↔S.
 
-    Flat (shaded)   — horizontal panel with obstacle shadow correction
-    Flat (unshaded) — horizontal panel, no obstacle (baseline / upper bound)
-                      Uses the same total panel area as the shaded system so
-                      results are directly comparable.
-    NS Rear         — vertical panel (90°) facing along the driving direction,
-                      averaged over forward (North) and reverse (South) runs
-    NS Side         — vertical panel (90°) perpendicular to driving direction
-                      (faces East when going North, West when going South),
-                      averaged over both runs
+    Flat (shaded)   — front + back horizontal panels with obstacle shadow
+    Flat (unshaded) — same total area, no obstacle (upper bound baseline)
+    NS Side (East)  — 6.8 m² vertical panel facing East (right side going North)
+    NS Side (West)  — 6.8 m² vertical panel facing West (left side going North)
+    NS Side (Total) — combined energy of both side panels (sum of East + West)
     """
-    # Total physical panel area shared by shaded and unshaded systems
-    _total_area = shade_params.L_front * shade_params.d_front + \
-                  shade_params.L_back  * shade_params.d_back
+    SIDE_PANEL_AREA_M2 = 6.8  # m² per side
+
+    _total_area = (shade_params.L_front * shade_params.d_front +
+                   shade_params.L_back * shade_params.d_back)
 
     unshaded_cfg = flat_ns_vehicle_system(
         shade_params=None,
@@ -111,24 +108,35 @@ def ns_vehicle_systems(shade_params: ShadeParams = DEFAULT_SHADE) -> dict:
     )
 
     return {
-        "NS Flat (shaded)":   flat_ns_vehicle_system(
-                                  shade_params=shade_params,
-                                  name="NS Flat (shaded)",
-                              ),
-        "NS Flat (unshaded)": unshaded_cfg,
-        "NS Rear":  tilted_ns_vehicle_system(
-                        tilt_deg=90,
-                        forward_azimuth_deg_from_north=0,   # faces South when going North
-                        name="NS Rear",
-                    ),
-        "NS Side":  tilted_ns_vehicle_system(
-                        tilt_deg=90,
-                        forward_azimuth_deg_from_north=90,  # faces East when going North
-                        name="NS Side",
-                    ),
+        # ── Flat roof panels (front + back, with and without shading) ──────
+        "NS Flat (shaded)": flat_ns_vehicle_system(
+            shade_params=shade_params,
+            name="NS Flat (shaded)",
+        ),
+        #"NS Flat (unshaded)": unshaded_cfg,
+
+        # ── Side panels: tilt=90°, each 6.8 m² ────────────────────────────
+        # East-facing panel: right-hand side when driving North.
+        # When the vehicle reverses (going South) this same physical panel
+        # faces West, so PVGIS fetches for both azimuths are averaged
+        # inside tilted_ns_vehicle_system.
+        # "NS Side (East)": tilted_ns_vehicle_system(
+        #     tilt_deg=90,
+        #     forward_azimuth_deg_from_north=90,  # East when going N
+        #     #panel_area_m2=SIDE_PANEL_AREA_M2,
+        #     name="NS Side (East)",
+        # ),
+
+        # West-facing panel: left-hand side when driving North.
+        # By symmetry its annual yield equals the East panel's, but we
+        # model it explicitly so monthly/hourly breakdowns are available.
+        "NS Sides": tilted_ns_vehicle_system(
+            tilt_deg=90,
+            forward_azimuth_deg_from_north=270,  # West when going N
+            #panel_area_m2=SIDE_PANEL_AREA_M2,
+            name="NS Side (West)",
+        ),
     }
-
-
 # ---------------------------------------------------------------------------
 # Main scenario group builder
 # ---------------------------------------------------------------------------
@@ -142,9 +150,6 @@ def build_scenario_groups(fixed_tilt: float, common: dict) -> dict:
     via the common dict — nothing is overwritten here.
     """
     return {
-        "single_axis_comparison": single_axis_comparison(
-            latitude=common["latitude"]
-        ),
         "ns_vehicle": ns_vehicle_systems(DEFAULT_SHADE),
     }
 
