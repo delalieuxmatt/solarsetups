@@ -259,6 +259,7 @@ def run_simulation(
         longitude: float,
         panel_area_m2: float = 13.6,
         efficiency: float = 0.20,
+        temp_coeff: float = 0.0,
         year: int = pvgis_client.DEFAULT_YEAR,
         raddatabase: str = pvgis_client.DEFAULT_DB,
         use_cache: bool = True,
@@ -391,7 +392,22 @@ def run_simulation(
     # ------------------------------------------------------------------
     # 4. Power and energy
     # ------------------------------------------------------------------
-    df["power_w"]   = df["irradiance_wm2"] * _area_for_power * efficiency
+    if "T2m" in df.columns and temp_coeff != 0.0:
+        # Approximate cell temp using a typical NOCT of 45°C
+        # T_cell = T_ambient + (Irradiance / 800) * 25
+        t_cell = df["T2m"] + (df["irradiance_wm2"] / 800.0) * 25.0
+
+        # Calculate efficiency multiplier relative to 25°C standard test conditions
+        # Example: 1.0 + (-0.0035 * (45 - 25)) = 0.93 (7% efficiency loss)
+        eff_multiplier = 1.0 + temp_coeff * (t_cell - 25.0)
+
+        # Guard against extreme negative values in edge cases
+        eff_multiplier = np.clip(eff_multiplier, 0.0, None)
+
+        dynamic_efficiency = efficiency * eff_multiplier
+    else:
+        dynamic_efficiency = efficiency
+    df["power_w"]   = df["irradiance_wm2"] * _area_for_power * dynamic_efficiency
     df["energy_wh"] = df["power_w"] * _DT_STEP_H
 
     # ------------------------------------------------------------------
@@ -456,6 +472,7 @@ def tilt_sweep(
     longitude: float,
     panel_area_m2: float = 1.0,
     efficiency: float = 0.20,
+    temp_coeff: float = 0.0,
     tilt_min: float = 0.0,
     tilt_max: float = 90.0,
     tilt_step: float = 5.0,
@@ -478,6 +495,7 @@ def tilt_sweep(
             months=months, start_hour=start_hour, end_hour=end_hour,
             latitude=latitude, longitude=longitude,
             panel_area_m2=panel_area_m2, efficiency=efficiency,
+            temp_coeff=temp_coeff,
             year=year, raddatabase=raddatabase, use_cache=use_cache,
         )
         total_kwh = sim["energy_wh"].sum() / 1000.0
@@ -500,6 +518,7 @@ def latitude_sweep(
     longitude: float,
     panel_area_m2: float = 1.0,
     efficiency: float = 0.20,
+    temp_coeff: float = 0.0,
     lat_min: float = 0.0,
     lat_max: float = 65.0,
     lat_step: float = 5.0,
@@ -519,6 +538,7 @@ def latitude_sweep(
     common_sim = dict(
         months=months, start_hour=start_hour, end_hour=end_hour,
         longitude=longitude, panel_area_m2=panel_area_m2, efficiency=efficiency,
+        temp_coeff = temp_coeff,
         year=year, raddatabase=raddatabase, use_cache=use_cache,
     )
 

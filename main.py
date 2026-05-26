@@ -50,6 +50,8 @@ def parse_args():
                    help="Panel efficiency 0-1 (default: 0.20)")
     p.add_argument("--tilt-min",    type=float, default=0.0,
                    help="Tilt sweep start (default: 0°)")
+    p.add_argument("--temp-coeff", type=float, default=0.0,
+                   help="Temperature coefficient per °C (e.g., -0.0035 for -0.35%%). Default: 0.0 (off)")
     p.add_argument("--tilt-max",    type=float, default=90.0,
                    help="Tilt sweep end (default: 90°)")
     p.add_argument("--tilt-step",   type=float, default=5.0,
@@ -131,6 +133,7 @@ def main():
         latitude=args.lat,
         longitude=args.lon,
         panel_area_m2=args.area,
+        temp_coeff=args.temp_coeff,
         efficiency=args.efficiency,
         year=args.year,
         raddatabase=args.raddatabase,
