@@ -486,6 +486,14 @@ def plot_yearly_breakdown(
         title: str = "Yearly Energy Breakdown by System",
         save_path: str | None = None,
 ) -> None:
+    print(f"\n--- {title} ---")
+    for name, df in results.items():
+        if "sim_year" not in df.columns:
+            continue
+        print(f"\nSystem: {name}")
+        for year in sorted(years):
+            yearly_kwh = df[df["sim_year"] == year]["energy_wh"].sum() / 1000.0
+            print(f"{yearly_kwh:.2f}")
     """Bar chart comparing total kWh per system per year."""
     selected = sorted(years)
     n_years = len(selected)
